@@ -1,134 +1,126 @@
-/**
- * Created from https://github.com/iwater work. Updated to work with the latest spread Daemon.
- */
-
 var net = require('net');
 var events = require('events');
 var sys = require('sys');
 
-/**
- * Create Spread connection
- * @param  {String} name            Name of the client connecting to spread
- * @param  {Number} Port            Port used for connection to Spread
- * @param  {String} Host            IP address or URL of Spread daemon
- * @param  {String} Default_Channel Group that the client will join on connection.
- * @return {EventEmitter}                 Event emitter
- */
-exports.createConnection = function(name, Port, Host, Default_Channel){
+exports.createConnection = function(name, Port, Host, DefaultChannel/*, logger*/){
 
-  var emitter         = new events.EventEmitter;
-  var state           = 'init';
-  var resp            = '';
-  var group           = '';
-  var autoReconnect   = true;
-  var header          = '';
-  var str2            = '';
-  var last            = '';
-  var queue           = [];
+  var emitter = new events.EventEmitter;
+  var state = 'init';
+  var resp = '';
+  var group = '';
+  var autoReconnect = true;
+
+  var client = net.createConnection(Port, Host);
+  client.setEncoding('binary');
+  client.setNoDelay();
+
+  // console.log(client);
+
+  client.on('connect', function(){
+    console.log('Connected!!!');
+    // console.log('ERROR: ', err);
+    emitter.emit('connect');
+
+    //dws
+    var dataPackage = String.fromCharCode(0x04, 0x03, 0x00, 0x01, name.length) + name;
+    //dws 
+    //var dataPackage = String.fromCharCode(0x04, 0x01, 0x00, 0x01, name.length) + name;
+    // console.log(dataPackage);
+    client.write(dataPackage);
+  });
+
+  client.on('error', function(error){
+    console.log('ERROR: ', error);
+    emitter.emit('error', error);
+  });
+
+  var header = '';
+  var str2 = '';
+  var last = '';
+  var queue = [];
+
   var unreliable_mess = String.fromCharCode(0x81,00,00,0x80);
   var reliable_mess   = String.fromCharCode(0x82,00,00,0x80);
   var fifo_mess       = String.fromCharCode(0x84,00,00,0x80);
   var causal_mess     = String.fromCharCode(0x88,00,00,0x80);
   var agreed_mess     = String.fromCharCode(0x90,00,00,0x80);
   var safe_mess       = String.fromCharCode(0xa0,00,00,0x80);
-  var join_mess       = String.fromCharCode(0x80, 0x11, 0, 0x80);
-  var count           = 0;
-  var last_count      = 0;
 
-  var client = net.createConnection(Port, Host);
-  client.setEncoding('binary');
-  client.setNoDelay();
+  var join_mess = String.fromCharCode(0x80, 0x11, 0, 0x80);
 
-  /**
-   * Connecting to Spread
-   * @return {Event} connect event is emitted through node emitter
-   */
-  client.on('connect', function(){
-    emitter.emit('connect');
+  var count = 0;
+  var last_count = 0;
 
-    var dataPackage = String.fromCharCode(0x04, 0x03, 0x00, 0x01, name.length) + name;
-    client.write(dataPackage);
-  });
-
-  /**
-   * Error in connection to spread
-   * @param  {Object} error Provides error description.
-   * @return {Event}       Emits error event with error information.
-   */
-  client.on('error', function(error){
-    emitter.emit('error', error);
-  });
-
-  /**
-   * Handler for when data is received from Spread
-   * @param  {String} data Data sent from Spread
-   * @return {Event}      Emits logon/logined/message events.
-   */
   client.on('data', function(data){
+    console.log('THE DATA: ', data);
+    console.log('THE STATE: ', state);
+    console.log('********************************');
+    
     switch(state){
       case 'init':
-        emitter.emit('logon', data);
+      emitter.emit('logon', data);
       break;
 
       case 'logon':
-        resp += data.toString('binary');
-        if(resp.length > 5){
-          group = resp.substr(5);
-          resp = '';
-          emitter.emit('logined', data);
-        }
+      resp += data.toString('binary');
+      if(resp.length > 5){
+      group = resp.substr(5);
+      resp = '';
+      emitter.emit('logined', data);
+      }
       break;
 
       case 'waiting':
-        str2 += data;
-        var length = 0;
-        
-        while(str2.length > 48 + length) {
-          length = decodeInt32(str2, 44) + decodeInt32(str2, 36)*32;
+      str2 += data;
+      var length = 0;
+      
+      while(str2.length > 48 + length) {
+        length = decodeInt32(str2, 44) + decodeInt32(str2, 36)*32;
 
-          switch(str2.substr(0,4)){
+        switch(str2.substr(0,4)){
 
-            case unreliable_mess:
-            case safe_mess:
-            case reliable_mess:
-            case fifo_mess:
-            case agreed_mess:
-            case causal_mess:
-              if(str2.length >= 48 + length) {
-                count++;
-                var channel = str2.substr(48, 32).RTrim();
-                var message = new Buffer(str2.substr(80, length - 32), 'binary').toString('utf8');
-                str2 = str2.substr(48 + length);
-                emitter.emit('message', channel, message);
-              }
-              break;
-
-            case join_mess:
-              if(str2.length >= 48 + length) {
-                last = str2.substr(0, 48 + length);
-                str2 = str2.substr(48 + length);
-              }
-              break;
-
-            default:
+          case unreliable_mess:
+          case safe_mess:
+          case reliable_mess:
+          case fifo_mess:
+          case agreed_mess:
+          case causal_mess:
+            console.log('Data message!!');
+            if(str2.length >= 48 + length) {
+              count++;
+              var channel = str2.substr(48, 32).RTrim();
+              var message = new Buffer(str2.substr(80, length - 32), 'binary').toString('utf8');
               str2 = str2.substr(48 + length);
-              break;
-          }
+              emitter.emit('message', channel, message);
+            }
+            break;
 
-          if(str2.length > 48) length = decodeInt32(str2, 44) + decodeInt32(str2, 36) * 32;
+          case join_mess:
+            console.log('Membership message!!');
+            if(str2.length >= 48 + length) {
+              last = str2.substr(0, 48 + length);
+              str2 = str2.substr(48 + length);
+            }
+            break;
+
+          default:
+            console.log('Unknown message!!', str2);
+            //logger.debug('spread default:' + rstr2hex(str2.substr(0,4)));
+            //logger.debug(rstr2hex(String.fromCharCode(0x80,0,0,0x80) | String.fromCharCode(0x20,0,0,0)));
+            str2 = str2.substr(48 + length);
+            break;
         }
+
+        if(str2.length > 48) length = decodeInt32(str2, 44) + decodeInt32(str2, 36) * 32;
+      }
       break;
 
       default:
-        // Data received, but no handler.
+        console.log('SWITCH STATEMENT BROKE!!');
       break;
       }
   });
-  
-  /**
-   * Connection to Spread has closed.
-   * @return {Event} Emits close event, returns state to init.
-   */
+
   client.on('close', function(){
     emitter.emit('close');
     state = 'init';
@@ -137,23 +129,16 @@ exports.createConnection = function(name, Port, Host, Default_Channel){
     });
   });
 
-  /**
-   * Logon
-   * @param  {String} str Spread string
-   */
   emitter.on('logon', function(str){
     state = 'logon';
     client.write('NULL'.r_pad(90));
   });
 
-  /**
-   * Client has authenticated with Spread
-   * @param  {String} str Spread message
-   */
   emitter.on('logined', function(str){
     state = 'logined';
+    //console.log('spread group:'+group);
 
-    // Waiting 10s for other clients to connect to the server in order to receive messages
+    // 等待 10s 以便其他接收消息客户端连上服务端
     setTimeout(function(){
       while(queue.length > 0){
         var msg = queue.shift();
@@ -168,7 +153,7 @@ exports.createConnection = function(name, Port, Host, Default_Channel){
     var privateGroup = group.r_pad(32);
     var numGroups = encodeInt32(1);
     var type = String.fromCharCode(0x80, 0x01, 0, 0x80);
-    var groups = (send_group || Default_Channel).r_pad(32);
+    var groups = (send_group || DefaultChannel).r_pad(32);
 
     client.write([serviceType, privateGroup, numGroups, type, encodeInt32(Buffer.byteLength(str)), groups].join(''), 'binary');
     client.write(str, 'utf8');
@@ -178,6 +163,7 @@ exports.createConnection = function(name, Port, Host, Default_Channel){
   };
 
   emitter.join = function(join_group){
+    //console.log('fire join');
     state = 'waiting';
     var str = '';
 
@@ -193,10 +179,6 @@ exports.createConnection = function(name, Port, Host, Default_Channel){
 
   return emitter;
 };
-
-/**
- * UTILS
- */
 
 String.prototype.r_pad = function(length){
   var chr = String.fromCharCode(0);
